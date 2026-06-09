@@ -22,11 +22,8 @@ function ensureDataDir() {
 function loadCounts() {
   ensureDataDir();
   if (!fs.existsSync(DATA_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-  } catch {
-    return {};
-  }
+  try { return JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); }
+  catch { return {}; }
 }
 
 function saveCounts(counts) {
@@ -42,10 +39,7 @@ function resetCounts() {
 // ─── Slack sender ─────────────────────────────────────────────────────────────
 
 async function sendSlackMessage(text) {
-  if (!SLACK_WEBHOOK_URL) {
-    console.error('[Slack] SLACK_WEBHOOK_URL is not set');
-    return;
-  }
+  if (!SLACK_WEBHOOK_URL) { console.error('[Slack] SLACK_WEBHOOK_URL is not set'); return; }
   try {
     await axios.post(SLACK_WEBHOOK_URL, { text });
     console.log('[Slack] Message sent');
@@ -65,7 +59,9 @@ async function sendEodReport() {
     return;
   }
 
-  const lines = accounts.map(([label, count]) => `• *${label}*: отправлено ${count} инвайтов`);
+  const lines = accounts.map(([label, count]) =>
+    `• *${label}*: отправлено ${count} инвайт${plural(count)}`
+  );
   const total = accounts.reduce((sum, [, count]) => sum + count, 0);
 
   const message = [
@@ -73,64 +69,119 @@ async function sendEodReport() {
     '',
     ...lines,
     '',
-    `*Итого:* ${total} инвайтов со всех аккаунтов`
+    `*Итого:* ${total} инвайт${plural(total)} со всех аккаунтов`
   ].join('\n');
 
   await sendSlackMessage(message);
   resetCounts();
 }
 
+function plural(n) {
+  if (n % 10 === 1 && n % 100 !== 11) return '';
+  if (n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20)) return 'а';
+  return 'ов';
+}
+
+// ─── Reply notification ───────────────────────────────────────────────────────
+
+async function sendReplyNotification(body) {
+  const account = body?.sender_profile?.label ||
+    `${body?.sender_profile?.first_name || ''} ${body?.sender_profile?.last_name || ''}`.trim() ||
+    'Неизвестный аккаунт';
+
+  const contact = body?.contact || {};
+  const name = contact.name || `${contact.first_name || ''} ${contact.last_name || ''}`.trim() || 'Неизвестный';
+  const position = contact.position || '';
+  const company = contact.company_name || '';
+  const linkedin = contact.linkedin_url || contact.linkedin || '';
+
+  const messageText = body?.linkedin_message?.text || '';
+  const shortText = messageText.length > 200
+    ? messageText.substring(0, 200) + '...'
+    : messageText;
+
+  const who = [position, company].filter(Boolean).join(' · ');
+
+  const lines = [
+    '💬 *Новый ответ — LinkedIn*',
+    '',
+    `*Аккаунт:* ${account}`,
+    `*От:* ${name}${who ? ' · ' + who : ''}`,
+  ];
+
+  if (shortText) lines.push(`*Сообщение:* "${shortText}"`);
+  if (linkedin) lines.push(`*Профиль:* ${linkedin}`);
+
+  await sendSlackMessage(lines.join('\n'));
+}
+
 // ─── Webhook endpoint ─────────────────────────────────────────────────────────
 
-app.post('/webhook/grinfi', (req, res) => {
+app.post('/webhook/grinfi', async (req, res) => {
   const body = req.body;
+  const event = body.event_name;
 
-  if (body.event_name !== 'sender_profile_sent_linkedin_connection_request') {
-    return res.status(200).json({ status: 'ignored', event: body.event_name });
+  console.log(`[Webhook] Event: ${event}`);
+
+  if (event === 'sender_profile_sent_linkedin_connection_request') {
+    const label = body?.sender_profile?.label ||
+      `${body?.sender_profile?.first_name || ''} ${body?.sender_profile?.last_name || ''}`.trim() ||
+      'Unknown Account';
+
+    const counts = loadCounts();
+    counts[label] = (counts[label] || 0) + 1;
+    saveCounts(counts);
+    console.log(`[Webhook] Invite counted for: ${label} (today: ${counts[label]})`);
+    return res.status(200).json({ status: 'ok', account: label, count: counts[label] });
   }
 
-  const label = body?.sender_profile?.label || body?.sender_profile?.uuid || 'Unknown Account';
+  if (event === 'contact_replied_linkedin_message') {
+    await sendReplyNotification(body);
+    return res.status(200).json({ status: 'ok', event });
+  }
 
-  const counts = loadCounts();
-  counts[label] = (counts[label] || 0) + 1;
-  saveCounts(counts);
-
-  console.log(`[Webhook] Invite counted for: ${label} (total today: ${counts[label]})`);
-
-  res.status(200).json({ status: 'ok', account: label, count: counts[label] });
+  res.status(200).json({ status: 'ignored', event });
 });
 
 // ─── Health check ─────────────────────────────────────────────────────────────
 
 app.get('/health', (req, res) => {
-  const counts = loadCounts();
-  res.json({ status: 'ok', today: counts });
+  res.json({ status: 'ok', today: loadCounts() });
 });
 
-// ─── Manual trigger (for testing) ─────────────────────────────────────────────
+// ─── Manual triggers ──────────────────────────────────────────────────────────
 
 app.post('/trigger-report', async (req, res) => {
-  console.log('[Manual] EOD report triggered manually');
+  console.log('[Manual] EOD report triggered');
+  res.json({ status: 'ok' });
   await sendEodReport();
-  res.json({ status: 'ok', message: 'Report sent' });
 });
 
-// ─── Cron: 18:00 Kyiv time (UTC+3 → 15:00 UTC) ───────────────────────────────
-
-cron.schedule('0 15 * * *', async () => {
-  console.log('[Cron] Running EOD report at 18:00 Kyiv time');
-  await sendEodReport();
-}, {
-  timezone: 'Europe/Kyiv'
+app.post('/trigger-reply-test', async (req, res) => {
+  console.log('[Manual] Reply test triggered');
+  res.json({ status: 'ok' });
+  await sendReplyNotification({
+    sender_profile: { label: 'Victoria Koko' },
+    contact: {
+      name: 'John Smith',
+      position: 'CEO',
+      company_name: 'Acme Corp',
+      linkedin_url: 'https://linkedin.com/in/johnsmith'
+    },
+    linkedin_message: { text: 'Интересно, давайте созвонимся на этой неделе!' }
+  });
 });
+
+// ─── Cron: 18:00 Kyiv ─────────────────────────────────────────────────────────
+
+cron.schedule('0 18 * * *', async () => {
+  console.log('[Cron] EOD report at 18:00 Kyiv');
+  await sendEodReport();
+}, { timezone: 'Europe/Kyiv' });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log(`[Server] Running on port ${PORT}`);
-  console.log(`[Server] Webhook URL: POST /webhook/grinfi`);
-  console.log(`[Server] EOD report scheduled at 18:00 Kyiv time`);
-  if (!SLACK_WEBHOOK_URL) {
-    console.warn('[Warning] SLACK_WEBHOOK_URL is not set!');
-  }
+  if (!SLACK_WEBHOOK_URL) console.warn('[Warning] SLACK_WEBHOOK_URL is not set!');
 });
