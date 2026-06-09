@@ -1,0 +1,15 @@
+{
+  "name": "grinfi-slack-bot",
+  "version": "1.0.0",
+  "description": "Grinfi → Slack notifications for LinkedIn invites",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-cron": "^3.0.3",
+    "axios": "^1.6.0"
+  }
+}
