@@ -55,21 +55,21 @@ async function sendEodReport() {
   const accounts = Object.entries(counts);
 
   if (accounts.length === 0) {
-    await sendSlackMessage('📊 *Итоги дня — LinkedIn инвайты*\n\nСегодня инвайты не отправлялись.');
+    await sendSlackMessage('📊 *End of Day — LinkedIn Invites*\n\nNo invites were sent today.');
     return;
   }
 
   const lines = accounts.map(([label, count]) =>
-    `• *${label}*: отправлено ${count} инвайт${plural(count)}`
+    `• *${label}*: ${count} invite${count === 1 ? '' : 's'} sent`
   );
   const total = accounts.reduce((sum, [, count]) => sum + count, 0);
 
   const message = [
-    '📊 *Итоги дня — LinkedIn инвайты*',
+    '📊 *End of Day — LinkedIn Invites*',
     '',
     ...lines,
     '',
-    `*Итого:* ${total} инвайт${plural(total)} со всех аккаунтов`
+    `*Total:* ${total} invite${total === 1 ? '' : 's'} across all accounts`
   ].join('\n');
 
   await sendSlackMessage(message);
@@ -103,14 +103,14 @@ async function sendReplyNotification(body) {
   const who = [position, company].filter(Boolean).join(' · ');
 
   const lines = [
-    '💬 *Новый ответ — LinkedIn*',
+    '💬 *New Reply — LinkedIn*',
     '',
-    `*Аккаунт:* ${account}`,
-    `*От:* ${name}${who ? ' · ' + who : ''}`,
+    `*Account:* ${account}`,
+    `*From:* ${name}${who ? ' · ' + who : ''}`,
   ];
 
-  if (shortText) lines.push(`*Сообщение:* "${shortText}"`);
-  if (linkedin) lines.push(`*Профиль:* ${linkedin}`);
+  if (shortText) lines.push(`*Message:* "${shortText}"`);
+  if (linkedin) lines.push(`*Profile:* ${linkedin}`);
 
   await sendSlackMessage(lines.join('\n'));
 }
